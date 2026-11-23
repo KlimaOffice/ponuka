@@ -1061,6 +1061,7 @@ const mailSign = () => ['Ďakujem / Thank you','S pozdravom / Best regards',S.se
 const MAIL_TPL={
   quote:()=>'Dobrý deň,\n\nv prílohe Vám posielam cenovú ponuku č. {cislo}.\n\n'+mailSign(),
   cpRem:()=>'Dobrý deň,\n\ndňa {datum} som Vám posielal cenovú ponuku č. {cislo}. Chcem sa opýtať, či je pre Vás ešte aktuálna, prípadne či k nej máte otázky.\n\n'+mailSign(),
+  order:()=>'Dobrý deň,\n\nv prílohe posielam objednávku zo dňa {datum}. Prosím o potvrdenie prijatia a termín dodania.\n\n'+mailSign(),
   svc:()=>'Dobrý deň,\n\nblíži sa termín pravidelnej servisnej prehliadky Vašej klimatizácie ({termin}). Ozvite sa mi, prosím, a dohodneme si deň, ktorý Vám vyhovuje.\n\n'+mailSign()
 };
 const mailTpl = kind => (S.settings.mailTpl||{})[kind] || MAIL_TPL[kind]();
@@ -1481,7 +1482,7 @@ function viewUdaje(){
 }
 
 /* ============ modul: Sklad materiálu ============ */
-const SK_CATS=['Zariadenie','Materiál'];
+const SK_CATS=['Zariadenie','Materiál','Náradie'];
 function skState(it){
   if(it.stock<=0) return {cls:'out',text:'Nie je skladom'};
   if(it.min>0 && it.stock<=it.min) return {cls:'low',text:'Pod minimom'};
@@ -1500,27 +1501,91 @@ function skSlotOptions(sel){
   return h;
 }
 function skDist(it){ const m=skLocMap(it), k=Object.keys(m).filter(x=>+m[x]!==0); if(k.length<2&&!(k.length===1&&k[0]!=='main')) return ''; return `<small class="tl-sub" style="margin:4px 0 0">${k.map(x=>esc(skLocName(x))+' '+fq(m[x])).join(' · ')}</small>`; }
+const SK_VAT=[23,19,5,0];
+const skVat=it=>(it.vat===undefined||it.vat===null||it.vat==='')?23:+it.vat;
+const skGross=(net,vat)=>Math.round((+net||0)*(1+vat/100)*100)/100;
+const skNet=(gross,vat)=>Math.round((+gross||0)/(1+vat/100)*10000)/10000;
+const skSortVal=(it,k)=>k==='supplier'?(((S.sklad.suppliers||[]).find(x=>x.id===it.supplierId)||{}).name||''):(it[k]===undefined||it[k]===null?'':it[k]);
+const SK_TXT=(f,w,ph)=>(it)=>`<input type="text" data-sf="${f}" value="${esc(it[f]||'')}" placeholder="${ph||''}" style="min-width:${w}px;font-size:12.5px">`;
+const SK_MON=(f)=>(it)=>`<input type="number" class="n" min="0" step="any" data-sf="${f}" value="${it[f]?Math.round(it[f]*10000)/10000:''}" placeholder="0,00">`;
+const SK_GRS=(f,g)=>(it)=>`<input type="number" class="n" min="0" step="any" data-sf="${g}" value="${it[f]?skGross(it[f],skVat(it)):''}" placeholder="0,00">`;
+/* k, názov, zarovnanie, len majiteľ, kľúč zoradenia, skryté predvolene, bunka */
+const SK_DEF=[
+ ['ean','Kód','',0,'ean',0,it=>`<div style="display:flex;gap:4px;align-items:center"><input type="text" data-sf="ean" value="${esc(it.ean||'')}" placeholder="Kód / EAN" style="min-width:110px;font-size:12.5px"><button class="btn small" type="button" data-act="x-scan-ean" title="Skenovať kód">${ICON_SCAN}</button></div>`],
+ ['name','Názov','',0,'name',0,it=>`<input type="text" data-sf="name" value="${esc(it.name)}" placeholder="Názov položky">`,'name'],
+ ['rev','Revízia','',0,'rev',1,SK_TXT('rev',70)],
+ ['config','Konfigurácia','',0,'config',1,SK_TXT('config',100,'Default')],
+ ['place','Umiestnenie','',0,'place',0,SK_TXT('place',90,'napr. H52')],
+ ['cat','Materiál','',0,'cat',0,it=>`<select data-sf="cat" style="min-width:112px">${SK_CATS.map(c=>`<option ${c===it.cat?'selected':''}>${c}</option>`).join('')}</select>`],
+ ['unit','MJ','',0,'unit',0,it=>`<input type="text" class="unit-in" data-sf="unit" value="${esc(it.unit)}">`,'unit'],
+ ['stock','Počet','r',0,'stock',0,(it,x)=>`<div class="stepper"><button data-act="sk-dec">−</button><input type="number" class="n" step="any" data-sf="stock" value="${it.stock}"><button data-act="sk-inc">+</button></div><div style="margin-top:4px"><span class="badge ${x.s.cls}">${x.s.text}</span></div>${skDist(it)}`,'num'],
+ ['min','Min.','r',0,'min',0,it=>`<input type="number" class="n" min="0" step="any" data-sf="min" value="${it.min||''}" placeholder="0" style="width:70px">`,'num'],
+ ['buy','Nák. cena bez DPH','r',1,'buy',0,SK_MON('buy'),'num'],
+ ['buyV','Nák. cena s DPH','r',1,'buy',0,SK_GRS('buy','buyV'),'num'],
+ ['vat','DPH','r',1,'vat',0,(it,x)=>`<select data-sf="vat" style="width:72px">${SK_VAT.map(v=>`<option value="${v}" ${v===x.vt?'selected':''}>${v} %</option>`).join('')}</select>`,'num'],
+ ['sell','Predaj bez DPH','r',1,'sell',0,SK_MON('sell'),'num'],
+ ['sellV','Predaj s DPH','r',1,'sell',0,SK_GRS('sell','sellV'),'num'],
+ ['supplier','Hlavný dodávateľ','',0,'supplier',0,(it,x)=>`<select data-sf="supplierId" style="max-width:150px"><option value="">—</option>${x.sups.map(z=>`<option value="${esc(z.id)}" ${z.id===it.supplierId?'selected':''}>${esc(z.name)}</option>`).join('')}</select>`],
+ ['scode','Cudzí názov','',0,'scode',0,SK_TXT('scode',100)],
+ ['origin','Krajina pôvodu','',0,'origin',0,SK_TXT('origin',100,'napr. Slovensko')],
+ ['spec','Špecifikácia – poznámka','',0,'spec',0,it=>`<input type="text" data-sf="spec" value="${esc(it.spec)}" placeholder="Parametre / poznámka" style="min-width:170px;font-size:12.5px">`],
+ ['slot','Použitie v ponuke','',0,'',0,it=>`<select data-sf="slot" data-lazy="1" title="Do ktorého riadku ponuky patrí" style="max-width:170px"><option value="${esc(it.slot||'')}" selected>${esc(skSlotLabel(it.slot))}</option></select>`],
+ ['act','','',0,'',0,it=>`<div class="rowact"><button class="btn small ghost" data-act="x-card" title="Karta položky: sklady, nákupy, pohyby">Karta</button><button class="x" data-act="sk-del" title="Odstrániť">${ICON.trash}</button></div>`]
+];
+const SK_LOCKED=['name','act'];
+const skColKey=()=>'klima.skcols.'+(skMyEmail()||'local');
+function skColPrefs(){
+  let p=null; try{ p=JSON.parse(localStorage.getItem(skColKey())||'null'); }catch(e){}
+  const keys=SK_DEF.map(d=>d[0]); let order=(p&&Array.isArray(p.order)?p.order:[]).filter(k=>keys.includes(k));
+  keys.forEach((k,i)=>{ if(!order.includes(k)){ const prev=keys.slice(0,i).reverse().find(x=>order.includes(x)); order.splice(prev?order.indexOf(prev)+1:0,0,k); } });
+  const hidden=p&&Array.isArray(p.hidden)?p.hidden.filter(k=>keys.includes(k)):SK_DEF.filter(d=>d[5]).map(d=>d[0]);
+  return {order,hidden:hidden.filter(k=>!SK_LOCKED.includes(k))};
+}
+function skColSave(p){ try{ localStorage.setItem(skColKey(),JSON.stringify(p)); }catch(e){} }
+let skQT=0;
+function skSlotLabel(id){ if(!id) return 'Nezaradené (len evidencia)'; const r=(S.catalog.rows||[]).find(x=>x.id===id); return r?(r.kind==='item'?rowLabel(r):'Celá skupina: '+r.title):'Nezaradené (len evidencia)'; }
+document.addEventListener('mousedown',e=>{ const el=e.target; if(el&&el.tagName==='SELECT'&&el.dataset.lazy){ const v=el.value; el.innerHTML=skSlotOptions(v); el.value=v; delete el.dataset.lazy; } },true);
+document.addEventListener('focusin',e=>{ const el=e.target; if(el&&el.tagName==='SELECT'&&el.dataset.lazy){ const v=el.value; el.innerHTML=skSlotOptions(v); el.value=v; delete el.dataset.lazy; } });
+function skCols(){ const own=skIsOwner(), p=skColPrefs(); return p.order.map(k=>SK_DEF.find(d=>d[0]===k)).filter(d=>d&&(own||!d[3])&&!p.hidden.includes(d[0])); }
+function skHead(){ const so=S.skSort||{}; return '<tr>'+skCols().map(d=>{ const [k,l,a,,sk]=d; const drag=SK_LOCKED.includes(k)&&k==='act'?'':` draggable="true" data-k="${k}"`;
+  return sk?`<th class="${a}" style="cursor:pointer;white-space:nowrap"${drag} data-act="x-sk-sort" data-k="${k}" data-sk="${sk}" title="Zoradiť · potiahnutím presunieš stĺpec">${l} ${so.k===sk?(so.d>0?'▲':'▼'):'<span style="opacity:.35">▾</span>'}</th>`:`<th class="${a}"${drag}>${l}</th>`; }).join('')+'</tr>'; }
 function skRows(){
-  const q=S.skQuery.trim().toLowerCase();
-  const list=S.sklad.items.filter(it=>{
-    if(q && !(it.name+' '+it.spec+' '+(it.ean||'')+' '+(it.scode||'')).toLowerCase().includes(q)) return false;
-    if(S.skFilter==='Zariadenie'||S.skFilter==='Materiál') return it.cat===S.skFilter;
+  const q=S.skQuery.trim().toLowerCase(), cols=skCols(), ncol=cols.length;
+  let list=S.sklad.items.filter(it=>{
+    if(q && !(it.name+' '+it.spec+' '+(it.ean||'')+' '+(it.scode||'')+' '+(it.place||'')+' '+(it.origin||'')+' '+(it.rev||'')+' '+(it.config||'')).toLowerCase().includes(q)) return false;
+    if(S.skFilter==='Zariadenie'||S.skFilter==='Materiál'||S.skFilter==='Náradie') return it.cat===S.skFilter;
+    if(S.skFilter==='noslot') return !it.slot&&it.cat!=='Náradie';
     if(S.skFilter==='low') return skState(it).cls!=='ok';
     return true;
   });
-  if(!list.length) return `<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:34px">${S.sklad.items.length?'Nič nezodpovedá filtru.':'Sklad je zatiaľ prázdny. Pridaj položku alebo ju vytvor zo šablóny ponuky.'}</td></tr>`;
-  return list.map(it=>{ const s=skState(it); return `<tr data-sid="${esc(it.id)}">
-    <td class="name"><input type="text" data-sf="name" value="${esc(it.name)}" placeholder="Názov položky"><input type="text" data-sf="spec" value="${esc(it.spec)}" placeholder="Parametre / poznámka (napr. 3,5 kW, A++)" style="margin-top:5px;font-size:12px">
-      <div style="display:flex;gap:6px;margin-top:5px"><input type="text" data-sf="ean" value="${esc(it.ean||'')}" placeholder="Kód / EAN" style="font-size:12px;flex:1;min-width:0"><button class="btn small" type="button" data-act="x-scan-ean" title="Skenovať kód">${ICON_SCAN}</button><select data-sf="supplierId" style="font-size:12px;max-width:130px"><option value="">Dodávateľ…</option>${(S.sklad.suppliers||[]).map(x=>`<option value="${esc(x.id)}" ${x.id===it.supplierId?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div></td>
-    <td><select data-sf="cat">${SK_CATS.map(c=>`<option ${c===it.cat?'selected':''}>${c}</option>`).join('')}</select></td>
-    <td class="unit"><input type="text" class="unit-in" data-sf="unit" value="${esc(it.unit)}"></td>
-    <td class="num"><div class="stepper"><button data-act="sk-dec">−</button><input type="number" class="n" step="any" data-sf="stock" value="${it.stock}"><button data-act="sk-inc">+</button></div><div style="margin-top:4px"><span class="badge ${s.cls}">${s.text}</span></div>${skDist(it)}</td>
-    <td class="num"><input type="number" class="n" min="0" step="any" data-sf="min" value="${it.min||''}" placeholder="0" style="width:70px"></td>
-    <td class="num"><input type="number" class="n" min="0" step="any" data-sf="buy" value="${it.buy||''}" placeholder="0,00"></td>
-    <td class="num"><input type="number" class="n" min="0" step="any" data-sf="sell" value="${it.sell||''}" placeholder="0,00"></td>
-    <td><select data-sf="slot" title="Do ktorého riadku ponuky patrí">${skSlotOptions(it.slot)}</select></td>
-    <td><div class="rowact"><button class="btn small ghost" data-act="x-card" title="Karta položky: sklady, nákupy, pohyby">Karta</button><button class="x" data-act="sk-del" title="Odstrániť">${ICON.trash}</button></div></td></tr>`; }).join('');
+  const so=S.skSort; if(so&&so.k){ const num=['stock','min','buy','sell','vat'].includes(so.k); list=list.slice().sort((a,b)=>{ const x=skSortVal(a,so.k), y=skSortVal(b,so.k); return so.d*(num?(+x||0)-(+y||0):String(x).localeCompare(String(y),'sk',{numeric:true})); }); }
+  if(!list.length) return `<tr><td colspan="${ncol}" style="text-align:center;color:var(--muted);padding:34px">${S.sklad.items.length?'Nič nezodpovedá filtru.':'Sklad je zatiaľ prázdny. Pridaj položku alebo ju vytvor zo šablóny ponuky.'}</td></tr>`;
+  const sups=S.sklad.suppliers||[];
+  const lim=S.skLimit||100;
+  return list.slice(0,lim).map(it=>{ const x={s:skState(it),vt:skVat(it),sups}; return `<tr data-sid="${esc(it.id)}">${cols.map(d=>`<td class="${d[7]||''}">${d[6](it,x)}</td>`).join('')}</tr>`; }).join('')+(list.length>lim?`<tr><td colspan="${ncol}" style="text-align:center;color:var(--muted);padding:14px">Zobrazených ${lim} z ${list.length} položiek. <button class="btn small" data-act="x-sk-more">Zobraziť ďalších 100</button> alebo použi hľadanie.</td></tr>`:'');
 }
+function skColDlg(){
+  const own=skIsOwner(), p=skColPrefs(); const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:90;display:flex;align-items:flex-start;justify-content:center;padding:40px 14px;overflow:auto';
+  const draw=()=>{ const q=skColPrefs(); const rows=q.order.map(k=>SK_DEF.find(d=>d[0]===k)).filter(d=>d&&d[0]!=='act'&&(own||!d[3]));
+    ov.innerHTML=`<div class="card" style="width:min(460px,100%);margin:0"><div class="card-head"><h3>Stĺpce zoznamu</h3><button class="btn small" data-c="close">Hotovo</button></div>
+    <p class="hint" style="margin:0 0 8px">Zaškrtni, čo chceš vidieť, a šípkami zmeň poradie. Stĺpce môžeš presúvať aj potiahnutím hlavičky v tabuľke. Nastavenie platí len pre teba na tomto zariadení.</p>
+    <ul style="list-style:none;margin:0;padding:0">${rows.map((d,i)=>`<li data-k="${d[0]}" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)"><label style="flex:1;display:flex;gap:8px;align-items:center"><input type="checkbox" data-c="vis" ${q.hidden.includes(d[0])?'':'checked'} ${SK_LOCKED.includes(d[0])?'disabled':''}>${esc(d[1])}</label><button class="btn small" data-c="up" ${i?'':'disabled'}>↑</button><button class="btn small" data-c="down" ${i<rows.length-1?'':'disabled'}>↓</button></li>`).join('')}</ul>
+    <div style="margin-top:12px"><button class="btn small ghost" data-c="reset">Obnoviť predvolené</button></div></div>`; };
+  draw();
+  ov.addEventListener('click',e=>{
+    const b=e.target.closest('[data-c]'); if(e.target===ov){ ov.remove(); return; } if(!b) return; const c=b.dataset.c;
+    if(c==='close'){ ov.remove(); return; }
+    const q=skColPrefs(); const li=b.closest('li'), k=li&&li.dataset.k;
+    if(c==='reset'){ try{ localStorage.removeItem(skColKey()); }catch(e){} }
+    else if(c==='vis'){ q.hidden=b.checked?q.hidden.filter(x=>x!==k):q.hidden.concat(k); skColSave(q); }
+    else if(c==='up'||c==='down'){ const vis=q.order.filter(x=>{ const d=SK_DEF.find(z=>z[0]===x); return d&&d[0]!=='act'&&(own||!d[3]); }); const i=vis.indexOf(k), j=i+(c==='up'?-1:1); if(j<0||j>=vis.length) return;
+      const a=q.order.indexOf(k), t=q.order.indexOf(vis[j]); q.order.splice(a,1); q.order.splice(t,0,k); skColSave(q); }
+    draw(); skColRefresh();
+  });
+  document.body.appendChild(ov);
+}
+function skColRefresh(){ const h=$('#sk-head'); if(h) h.innerHTML=skHead(); const b=$('#sk-body'); if(b) b.innerHTML=skRows(); }
 function viewSkladList(){
   const chip=(v,l)=>`<button data-act="sk-filter" data-v="${v}" class="${S.skFilter===v?'on':''}">${l}</button>`;
   const lowN=S.sklad.items.filter(i=>skState(i).cls!=='ok').length;
@@ -1530,10 +1595,10 @@ function viewSkladList(){
   return `<div class="page-head"><div><h1>Sklad materiálu</h1><p>Čo máš skladom. Po dokončení montáže sa použitý materiál odpočíta automaticky (výdajkou z auta montéra). Nákup, prevody a inventúru nájdeš v záložke Doklady.</p></div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${skTabs()}<button class="btn primary" data-act="sk-add">${ICON.plus} Nová položka</button></div></div>
   <section class="card"><div class="toolbar"><input type="text" id="sk-q" class="grow" placeholder="Hľadať v sklade alebo zadať kód…" value="${esc(S.skQuery)}" style="max-width:340px"><button class="btn" data-act="x-scan-q" title="Skenovať kód">${ICON_SCAN} Skenovať</button>
-    <div class="seg">${chip('all','Všetko')}${chip('Zariadenie','Zariadenia')}${chip('Materiál','Materiál')}${chip('low','Pod minimom'+(lowN?' ('+lowN+')':''))}</div>
-    <span class="grow"></span><button class="btn small ghost" data-act="sk-seed">Vytvoriť položky zo šablóny ponuky</button></div>
+    <div class="seg">${chip('all','Všetko')}${chip('Zariadenie','Zariadenia')}${chip('Materiál','Materiál')}${chip('Náradie','Náradie')}${chip('noslot','Nezaradené')}${chip('low','Pod minimom'+(lowN?' ('+lowN+')':''))}</div>
+    <span class="grow"></span><button class="btn small" data-act="x-sk-cols" title="Zobraziť, skryť a presunúť stĺpce">Stĺpce</button>${window.klimaShop&&skIsOwner()?`<button class="btn small" data-act="x-im-shop" ${S.cimBusy?'disabled':''} title="Prejde e-shop dodávateľa a aktualizuje ceny">Aktualizovať cenník</button>`:''}<button class="btn small ghost" data-act="sk-seed">Vytvoriť položky zo šablóny ponuky</button></div>
     <p class="hint">Stĺpec „Použitie v ponuke“ určuje, do ktorého riadku ponuky sa položka ponúkne v rolovacom menu – ceny a názov sa vyplnia automaticky. Viac klimatizácií môže patriť do riadku „Zariadenie“. Môžeš ju priradiť aj k celej skupine (voľba „Celá skupina: …“) – vtedy sa ponúkne pri „+ Pridať vlastnú položku“ v tej skupine; priradenie k hlavnej skupine platí aj pre jej podskupiny.</p>
-    <div class="tablewrap"><table><thead><tr><th>Položka</th><th>Kategória</th><th>MJ</th><th class="r">Skladom</th><th class="r">Min.</th><th class="r">Nákup €/MJ</th><th class="r">Predaj €/MJ</th><th>Použitie v ponuke</th><th></th></tr></thead>
+    <div class="tablewrap"><table><thead id="sk-head">${skHead()}</thead>
     <tbody id="sk-body">${skRows()}</tbody></table></div></section>
   <section class="card"><h3>História pohybov</h3>${log?`<ul class="log">${log}</ul>`:'<p class="hint" style="margin:0">Zatiaľ žiadne pohyby.</p>'}</section>`;
 }
@@ -1554,8 +1619,12 @@ function skLog(it,delta,reason){
 }
 function skInput(el){
   const it=S.sklad.items.find(x=>x.id===el.closest('tr').dataset.sid); if(!it) return; const f=el.dataset.sf;
+  const tr=el.closest('tr');
   if(['min','buy','sell'].includes(f)){ const v=parseFloat(el.value.replace(',','.')); it[f]=isNaN(v)||v<0?0:v; }
+  else if(f==='buyV'||f==='sellV'){ const v=parseFloat(el.value.replace(',','.')), k=f==='buyV'?'buy':'sell'; it[k]=isNaN(v)||v<0?0:skNet(v,skVat(it)); const o=tr.querySelector(`[data-sf="${k}"]`); if(o) o.value=it[k]?Math.round(it[k]*10000)/10000:''; }
+  else if(f==='vat'){ it.vat=+el.value; for(const k of ['buy','sell']){ const o=tr.querySelector(`[data-sf="${k}V"]`); if(o) o.value=it[k]?skGross(it[k],it.vat):''; } }
   else it[f]=el.value;
+  if(f==='buy'||f==='sell'){ const o=tr.querySelector(`[data-sf="${f}V"]`); if(o) o.value=it[f]?skGross(it[f],skVat(it)):''; }
   if(f==='slot'&&el.value) it.cat=skCatOfRow(el.value);
   if(f==='slot'||f==='cat'){ saveSklad(); renderView(); return; }
   if(f==='min'){ const b=el.closest('tr').querySelector('.badge'); const s=skState(it); b.className='badge '+s.cls; b.textContent=s.text; }
@@ -2061,9 +2130,9 @@ function skNeeds(){
   return S.sklad.items.map(it=>({it,res:c[it.id]||0,need:r3((c[it.id]||0)+(+it.min||0)-it.stock)})).filter(x=>x.need>0&&(x.res>0||+x.it.min>0));
 }
 const skOrderQty=x=>S.skOrder[x.it.id]!==undefined?S.skOrder[x.it.id]:Math.ceil(x.need);
-function skTabKeys(){ const r=Cloud.curRole(), own=skIsOwner(), k=['zoznam']; if(r!=='brigadnik'){ k.push('doklady','objednavky'); if(own||r==='monter') k.push('inventura'); if(own) k.push('nastavenie'); } return k; }
+function skTabKeys(){ const r=Cloud.curRole(), own=skIsOwner(), k=['zoznam']; if(r!=='brigadnik'){ k.push('doklady','objednavky'); if(own||r==='monter') k.push('inventura'); if(own) k.push('objednavka','nastavenie'); } return k; }
 function skTabs(){
-  const n=skNeeds().length, L={zoznam:'Zoznam',doklady:'Doklady',objednavky:'Na objednanie'+(n?' ('+n+')':''),inventura:'Inventúra',nastavenie:'Sklady a dodávatelia'};
+  const n=skNeeds().length, L={zoznam:'Zoznam',doklady:'Doklady',objednavky:'Na objednanie'+(n?' ('+n+')':''),objednavka:'Objednávka (PDF)',inventura:'Inventúra',nastavenie:'Sklady a dodávatelia'};
   return `<div class="seg" style="flex-wrap:wrap">${skTabKeys().map(k=>`<button data-act="sk-tab" data-tab="${k}" class="${S.skTab===k?'on':''}">${L[k]}</button>`).join('')}</div>`;
 }
 function skOrderBody(){
@@ -2093,7 +2162,7 @@ function viewSkOrder(){
     <div class="tablewrap"><table><thead><tr><th>Položka</th><th class="r">Skladom</th><th class="r">Rezervované</th><th class="r">Min.</th><th class="r">Objednať</th>${own?'<th class="r">Nákup €/MJ</th><th class="r">Spolu</th><th></th>':''}</tr></thead><tbody>${o.rows}</tbody></table></div>
     ${S.skCopy?`<label class="f" style="margin-top:12px">Kopírovanie sa nepodarilo – označ a skopíruj:<textarea readonly onclick="this.select()" style="min-height:110px">${esc(S.skCopy)}</textarea></label>`:''}</section>`;
 }
-function viewSklad(){ if(!skTabKeys().includes(S.skTab)) S.skTab='zoznam'; const t=S.skTab; return t==='objednavky'?viewSkOrder():t==='doklady'?viewDoklady():t==='inventura'?viewInventura():t==='nastavenie'?viewSkSetup():viewSkladList(); }
+function viewSklad(){ if(!skTabKeys().includes(S.skTab)) S.skTab='zoznam'; const t=S.skTab; return t==='objednavky'?viewSkOrder():t==='doklady'?viewDoklady():t==='inventura'?viewInventura():t==='nastavenie'?viewSkSetup():t==='objednavka'?viewSkOd():viewSkladList(); }
 async function skReceive(id){
   const x=skNeeds().find(n=>n.it.id===id), it=S.sklad.items.find(i=>i.id===id); if(!it) return;
   const q=x?skOrderQty(x):0; if(!(q>0)){ toast('Zadaj množstvo na prijatie.'); return; }
@@ -2966,7 +3035,7 @@ view.addEventListener('input',e=>{
     if(scope==='q'){ setPath(Q,path,val); saveDraft(); } else { setPath(S.settings,path,val); saveSettings(); }
   } else if(el.dataset.f){ if(el.tagName!=='SELECT') lineInput(el); }
   else if(el.dataset.sf){ if(el.dataset.sf!=='stock'&&el.tagName!=='SELECT') skInput(el); }
-  else if(el.id==='sk-q'){ S.skQuery=el.value; $('#sk-body').innerHTML=skRows(); }
+  else if(el.id==='sk-q'){ S.skQuery=el.value; S.skLimit=100; clearTimeout(skQT); skQT=setTimeout(()=>{ const b=$('#sk-body'); if(b) b.innerHTML=skRows(); },140); }
   else if(el.id==='cp-q'){ S.cpQuery=el.value; $('#cp-body').innerHTML=cpRows(); }
   else if(el.dataset.cu){ const key=el.closest('tr').dataset.ckey, s=custEnsure(key); s[el.dataset.cu]=el.value; saveCuDeb(s); }
   else if(el.id==='cu-q'){ S.cuQuery=el.value; $('#cu-body').innerHTML=cuRows(); }
@@ -3130,10 +3199,10 @@ view.addEventListener('click',e=>{
   else if(act==='tl-svc'){ const t=tlById(b.closest('tr').dataset.tid); if(t){ t.lastService=today(); t.nextService=''; tlLog(t,'Servis / kalibrácia vykonaná'); persist('app/naradie',S.tools); renderView(); toast('Servis zapísaný na dnešný dátum.'); } }
   else if(act==='tl-del'){ const id=b.closest('tr').dataset.tid, snap=clone(S.tools); S.tools.items=S.tools.items.filter(x=>x.id!==id); if(S.tlOpen===id) S.tlOpen=null; persist('app/naradie',S.tools); renderView();
     toast('Náradie odstránené.','Späť',()=>{ S.tools=snap; persist('app/naradie',S.tools); renderView(); }); }
-  else if(act==='sk-add'){ const it={id:'s-'+uid(),name:'',unit:'ks',cat:'Materiál',buy:0,sell:0,stock:0,min:0,spec:'',slot:''}; S.sklad.items.unshift(it); S.skFilter='all'; S.skQuery=''; saveSklad(); renderView(); const i=$(`tr[data-sid="${it.id}"] input`); if(i) i.focus(); }
+  else if(act==='sk-add'){ const it={id:'s-'+uid(),name:'',unit:'ks',cat:'Materiál',buy:0,sell:0,vat:23,stock:0,min:0,spec:'',slot:''}; S.sklad.items.unshift(it); S.skFilter='all'; S.skQuery=''; saveSklad(); renderView(); const i=$(`tr[data-sid="${it.id}"] input`); if(i) i.focus(); }
   else if(act==='sk-del'){ const id=b.closest('tr').dataset.sid; const snap=clone(S.sklad.items); S.sklad.items=S.sklad.items.filter(x=>x.id!==id); saveSklad(); renderView(); toast('Položka odstránená zo skladu.','Späť',()=>{S.sklad.items=snap;saveSklad();renderView();}); }
   else if(act==='sk-inc'||act==='sk-dec'){ const inp=b.parentElement.querySelector('input'); skStockChange(inp,(act==='sk-inc'?1:-1)); }
-  else if(act==='sk-filter'){ S.skFilter=b.dataset.v; renderView(); }
+  else if(act==='sk-filter'){ S.skFilter=b.dataset.v; S.skLimit=100; renderView(); }
   else if(act==='sk-seed') skSeed();
   else if(act.startsWith('cat-')) catAction(act,b);
 });
@@ -3573,9 +3642,13 @@ view.addEventListener('click',e=>{
   else if(a==='x-scan-q') xScan(code=>{ S.skQuery=code; S.skFilter='all'; S.skTab='zoznam'; renderView(); });
   else if(a==='x-scan-ean') xScan(code=>{ const tr=b.closest('tr'), it=S.sklad.items.find(x=>x.id===tr.dataset.sid); if(!it) return; const dup=S.sklad.items.find(x=>x!==it&&x.ean&&x.ean===code); if(dup) toast('Pozor: tento kód už má položka „'+dup.name+'“.'); it.ean=code; saveSklad(); renderView(); });
   else if(a==='x-recv-sup') skReceiveSup(b.dataset.sup);
+  else if(a==='x-sk-cols') skColDlg();
+  else if(a==='x-sk-more'){ S.skLimit=(S.skLimit||100)+100; $('#sk-body').innerHTML=skRows(); }
+  else if(a==='x-sk-sort'){ const k=b.dataset.sk, so=S.skSort||{}; S.skSort={k,d:so.k===k?-so.d:1}; $('#sk-head').innerHTML=skHead(); $('#sk-body').innerHTML=skRows(); }
 });
 
 /* ============ import katalógu dodávateľa ============ */
+const IM_SHOP='Klíma pre Teba';
 const IM_SKIP=[
   [/^(profylaktick[ýy] servis|teória a montáž|tepelné čerpadlá$|asistencia servisného)|hviezdne nebo/i,'služba / nie tovar'],
   [/^limitovaná akcia/i,'akciový balík viacerých kusov'],
@@ -3590,7 +3663,7 @@ function imParse(txt){
   if(L.length<2) throw new Error('Súbor je prázdny.');
   const sep=L[0].includes('\t')?'\t':L[0].includes(';')?';':',';
   const h=L[0].split(sep).map(x=>x.trim().toLowerCase()), c=n=>h.indexOf(n);
-  const ci={sku:c('sku'),name:c('nazov'),bez:c('cena_bez_dph'),mj:c('mj'),av:c('dostupnost'),kat:c('kategoria'),url:c('url')};
+  const ci={sku:c('sku'),name:c('nazov'),bez:c('cena_bez_dph'),dph:c('cena_s_dph'),mj:c('mj'),av:c('dostupnost'),kat:c('kategoria'),url:c('url')};
   if(ci.sku<0||ci.name<0||ci.bez<0) throw new Error('Súbor musí mať stĺpce sku, nazov a cena_bez_dph.');
   const num=s=>{ const v=parseFloat(String(s||'').replace(/\s/g,'').replace(',','.')); return isFinite(v)?v:null; };
   const seen=new Set(), rows=[];
@@ -3598,7 +3671,8 @@ function imParse(txt){
     const p=l.split(sep), g=i=>i>=0?(p[i]||'').trim():'';
     const sku=g(ci.sku); if(!sku||seen.has(sku)) continue; seen.add(sku);
     const kat=g(ci.kat), mj=g(ci.mj).toLowerCase();
-    rows.push({sku,name:g(ci.name),price:num(g(ci.bez)),unit:IM_UNIT[mj]||mj||'ks',avail:g(ci.av),kat,url:g(ci.url),
+    const pr=num(g(ci.bez)), gr=num(g(ci.dph)); let vat=null; if(pr>0&&gr>pr){ const v=Math.round((gr/pr-1)*100); vat=[5,19,23].includes(v)?v:null; }
+    rows.push({sku,name:g(ci.name),price:pr,vat,unit:IM_UNIT[mj]||mj||'ks',avail:g(ci.av),kat,url:g(ci.url),
       cat:/^(klimatizacie|tepelne-cerpadla|rekuperacia)/.test(kat)?'Zariadenie':'Materiál'});
   }
   return rows;
@@ -3640,24 +3714,28 @@ function imApply(){
   const P=S.cim; if(!P) return;
   let sup=imSupplier(P.sup);
   if(!sup){ sup={id:'d-'+uid(),name:P.sup.trim(),phone:'',email:'',note:''}; S.sklad.suppliers=S.sklad.suppliers||[]; S.sklad.suppliers.push(sup); }
-  const t=today(); let nNew=0,nUpd=0,nPrice=0;
+  const t=today(); let nNew=0,nUpd=0,nPrice=0; const newIds=[];
   for(const p of P.plan){
     if(p.act==='skip'||!(p.r.price>0)) continue; const r=p.r;
     if(p.act==='new'||!p.it){
-      S.sklad.items.push({id:'s-'+uid(),name:r.name,unit:r.unit,cat:r.cat,buy:r.price,sell:0,stock:0,min:0,spec:'',slot:'',supplierId:sup.id,scode:r.sku,curl:r.url,avail:r.avail,availAt:t,buyAt:t,buyLog:[{d:t,buy:r.price}]}); nNew++;
+      S.sklad.items.push({id:'s-'+uid(),name:r.name,unit:r.unit,cat:r.cat,buy:r.price,sell:0,vat:r.vat||23,stock:0,min:0,spec:'',slot:'',supplierId:sup.id,scode:r.sku,skat:r.kat,curl:r.url,avail:r.avail,availAt:t,buyAt:t,buyLog:[{d:t,buy:r.price}]}); nNew++; newIds.push(S.sklad.items[S.sklad.items.length-1].id);
     }else{
-      const it=p.it; it.scode=r.sku; if(!it.supplierId) it.supplierId=sup.id; it.curl=r.url; it.avail=r.avail; it.availAt=t;
+      const it=p.it; it.scode=r.sku; if(!it.supplierId) it.supplierId=sup.id; if(r.vat) it.vat=r.vat; it.curl=r.url; it.avail=r.avail; it.availAt=t;
       if(imChg(p)||!(it.buyLog||[]).length){ it.buyLog=[{d:t,buy:r.price}].concat(it.buyLog||[]).slice(0,40); if(imChg(p)) nPrice++; it.buy=r.price; it.buyAt=t; }
       nUpd++;
     }
   }
+  if(P.shop) sup.lastSync=new Date().toISOString();
+  const as=skAutoSlot(newIds);
   S.cim=null; saveSklad(); renderView();
-  toast(`Import hotový: ${nNew} nových položiek, ${nUpd} aktualizovaných (zmena ceny: ${nPrice}).`);
+  toast(`Import hotový: ${nNew} nových položiek (zaradených ${as.n}), ${nUpd} aktualizovaných (zmena ceny: ${nPrice}).`);
 }
 function imCard(){
   const sups=(S.sklad.suppliers||[]).map(s=>`<option value="${esc(s.name)}">`).join('');
   const P=S.cim;
-  let body=`<p class="hint">Nahraj súbor s cenníkom dodávateľa (stĺpce <b>sku, nazov, cena_bez_dph</b>, voliteľne mj, dostupnost, kategoria, url; oddelené tabulátorom, bodkočiarkou alebo čiarkou). Položky sa spárujú podľa kódu dodávateľa. Pri opakovanom importe sa len aktualizujú ceny a dostupnosť a zmena ceny sa zapíše do histórie. Nové položky vzniknú so stavom 0 a predajnou cenou 0.</p>
+  const sp=imSupplier(IM_SHOP), sync=sp&&sp.lastSync?new Date(sp.lastSync).toLocaleString('sk-SK',{day:'numeric',month:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+  let body=(window.klimaShop?`<div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn primary" data-act="x-im-shop" ${S.cimBusy?'disabled':''}>Aktualizovať cenník – ${esc(IM_SHOP)}</button><span class="hint" id="im-prog" style="margin:0">${S.cimBusy?'Pracujem…':(sync?'Naposledy aktualizované: '+sync:'')}</span></div>
+    <p class="hint" style="margin:8px 0 0">Aplikácia prejde e-shop, aktualizuje nákupné ceny a dostupnosť, nové položky vytvorí so stavom 0 a stav existujúcich položiek nemení. Ak nie si prihlásený, otvorí sa okno e-shopu – prihlásiš sa sám, heslo aplikácia nevidí ani neukladá.</p></div>`:`<p class="hint">Automatická aktualizácia z e-shopu je dostupná len v aplikácii pre PC. Tu môžeš nahrať súbor ručne.</p>`)+`<p class="hint">Alebo nahraj súbor s cenníkom dodávateľa (stĺpce <b>sku, nazov, cena_bez_dph</b>, voliteľne mj, dostupnost, kategoria, url; oddelené tabulátorom, bodkočiarkou alebo čiarkou). Položky sa spárujú podľa kódu dodávateľa. Pri opakovanom importe sa len aktualizujú ceny a dostupnosť a zmena ceny sa zapíše do histórie. Cena s DPH sa dopočíta so sadzbou DPH položky (23 %, ak súbor obsahuje aj cena_s_dph, zoberie sa z neho). Nové položky vzniknú so stavom 0 a predajnou cenou 0.</p>
     <div class="toolbar" style="margin-bottom:10px"><label class="f" style="margin:0">Dodávateľ<input type="text" list="im-sups" data-xf="im.sup" value="${esc(P?P.sup:'Klíma pre Teba')}" style="max-width:240px"></label><datalist id="im-sups">${sups}</datalist>
     <label class="btn" style="margin:0;cursor:pointer">Vybrať súbor<input type="file" accept=".tsv,.csv,.txt,text/*" data-xf="im.file" style="display:none"></label></div>`;
   if(P){
@@ -3669,6 +3747,7 @@ function imCard(){
     ${P.gone.length?`<p class="hint">${P.gone.length} položiek tohto dodávateľa už v súbore nie je (nemenia sa).</p>`:''}
     <div style="display:flex;gap:10px;margin-top:12px"><button class="btn primary" data-act="x-im-go" ${c.on?'':'disabled'}>Importovať ${c.on} položiek</button><button class="btn" data-act="x-im-cancel">Zrušiť</button></div>`;
   }
+  body+=`<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"><button class="btn" data-act="x-im-slots">Zaradiť nezaradené položky dodávateľa</button><p class="hint" style="margin:6px 0 0">Priradí položky do kategórie (Zariadenie, Materiál, Náradie) a do riadku alebo skupiny ponuky podľa názvu. Už zaradené položky nemení.</p></div>`;
   return `<section class="card"><div class="card-head"><h3>Import cenníka dodávateľa</h3></div>${body}</section>`;
 }
 function imRows(){
@@ -3697,6 +3776,57 @@ function imList(){
     return true;
   });
 }
+/* priradenie položiek dodávateľa do kategórie (Zariadenie / Materiál / Náradie) a do riadku či skupiny ponuky; už zaradené položky sa nemenia */
+function skAutoSlot(ids){
+  const rows=S.catalog.rows||[]; let h1='';
+  const items=rows.filter(r=>r.kind==='item').map(r=>({id:r.id,l:rowLabel(r)})), grps=rows.filter(r=>r.kind!=='item').map(r=>({id:r.id,l:r.title}));
+  let zar=null; for(const r of rows){ if(r.kind==='h1') h1=r.title; else if(r.kind==='item'&&!zar&&/zariadenie/i.test(h1)) zar=r.id; }
+  const row=rx=>(items.find(x=>rx.test(x.l))||{}).id||'', grp=rx=>(grps.find(x=>rx.test(x.l))||{}).id||'';
+  let n=0, nar=0;
+  for(const it of S.sklad.items){
+    if(!it.scode||it.slot||(ids&&!ids.includes(it.id))) continue;
+    const seg=((it.skat||'').replace(/\//g,'')||((it.curl||'').match(/^\/([^/]+)\//)||[])[1]||''), nm=it.name||'';
+    let slot='', cat=it.cat;
+    const dev=/^(klimatizacie|tepelne-cerpadla|rekuperacia)/.test(seg)&&!/wifi|modul|deflektor|ovláda|kábel|konzol|držiak|filter/i.test(nm);
+    if(/^naradie/.test(seg)){ cat='Náradie'; }
+    else if(dev){ cat='Zariadenie'; slot=/multi/i.test(nm)&&/vnútorn/i.test(nm)?row(/multisplit.*vnútorn/i):/multi/i.test(nm)&&/vonkaj/i.test(nm)?row(/multisplit.*vonkaj/i):(zar||''); }
+    else{
+      cat='Materiál';
+      if(/cyky.*5\s*g|5\s*[gx]\s*1[,.]5|komunika/i.test(nm)) slot=row(/komunika/i);
+      else if(/cyky.*3\s*g|3\s*[gx]\s*2[,.]5|napájac/i.test(nm)) slot=row(/napájac/i);
+      else if(/h05|ohybn/i.test(nm)) slot=row(/ohybn|h05/i);
+      else if(/kábel|kabel/i.test(nm)) slot=grp(/kabel/i);
+      else if(/istič/i.test(nm)) slot=row(/^istič/i);
+      else if(/vidlic/i.test(nm)) slot=row(/vidlic/i);
+      else if(/kondenz/i.test(nm)&&/hadic/i.test(nm)) slot=row(/kondenzn.*hadica/i);
+      else if(/kondenz/i.test(nm)&&/čerpadl/i.test(nm)) slot=row(/^čerpadlo/i);
+      else if(/kondenz|odvod/i.test(nm)) slot=grp(/odvod kondenz/i);
+      else if(/lišt|žľab|zlab|žlab/i.test(nm)) slot=row(/lišta na cu|plastov.*lišta/i);
+      else if(/cu\b|medený|medená|medene|predizol|potrubie/i.test(nm)) slot=row(/cu potrubie/i)||grp(/cu rozvody/i);
+      else if(/izolác|páska|pásk/i.test(nm)) slot=grp(/cu rozvody/i);
+      else if(/konzol|silentblok|podstav|držiak/i.test(nm)) slot=row(/konzola/i);
+      else if(/kotv|hmoždink|skrut|matic|redukc|mosadz|tvarovk/i.test(nm)) slot=grp(/^mont.*kotv/i)||grp(/kotviac/i);
+    }
+    it.cat=cat; if(slot){ it.slot=slot; n++; } else if(cat==='Náradie') nar++;
+  }
+  return {n,nar};
+}
+async function imShopUpdate(){
+  if(!window.klimaShop||S.cimBusy||!skIsOwner()) return;
+  S.cimBusy=true; renderView();
+  try{
+    const r=await klimaShop.update(); if(!r||!r.ok) throw new Error((r&&r.error)||'Aktualizácia zlyhala.');
+    if(r.rows.length<100) throw new Error(`Načítalo sa len ${r.rows.length} položiek, preto nič nemením.`);
+    const rows=r.rows.filter(x=>x.sku&&x.bez>0).map(x=>{ const v=x.bez>0&&x.dph>x.bez?Math.round((x.dph/x.bez-1)*100):null, mj=String(x.mj||'ks').toLowerCase();
+      return {sku:x.sku,name:x.name,price:x.bez,vat:[5,19,23].includes(v)?v:null,unit:IM_UNIT[mj]||mj,avail:x.avail,kat:x.kat,url:x.url,cat:/^(klimatizacie|tepelne-cerpadla|rekuperacia)/.test(x.kat)?'Zariadenie':'Materiál'}; });
+    const P=imPlan(rows,IM_SHOP); P.shop=true; S.cim=P; S.cimF='all'; S.cimQ='';
+    const first=!P.plan.some(p=>p.kind==='upd'), links=P.plan.some(p=>p.kind==='link');
+    S.cimBusy=false;
+    if(first||links){ S.skTab='nastavenie'; renderView(); toast(first?'Prvá aktualizácia: skontroluj náhľad a potvrď import.':'Našli sa podobné položky v sklade: skontroluj náhľad a potvrď import.'); }
+    else imApply();
+  }catch(e){ S.cimBusy=false; renderView(); toast(e.message||String(e)); }
+}
+if(window.klimaShop) klimaShop.onProgress(m=>{ const el=document.getElementById('im-prog'); if(el) el.textContent=m; });
 function imRefresh(){ const b=$('#im-body'); if(b){ b.innerHTML=imRows(); } }
 async function imFile(file){
   try{
@@ -3717,7 +3847,101 @@ view.addEventListener('click',e=>{
   if(a==='x-im-flt'){ S.cimF=b.dataset.v; renderView(); }
   else if(a==='x-im-bulk'){ for(const p of imList()) p.act=b.dataset.v==='on'?(p.act==='skip'?p.kind:p.act):'skip'; renderView(); }
   else if(a==='x-im-go') imApply();
+  else if(a==='x-im-shop') imShopUpdate();
+  else if(a==='x-im-slots'){ const r=skAutoSlot(null); saveSklad(); renderView(); toast(`Zaradených do ponuky: ${r.n}, náradie: ${r.nar}. Ostatné ostávajú nezaradené – zmeníš ich v stĺpci „Použitie v ponuke“.`); }
   else if(a==='x-im-cancel'){ S.cim=null; renderView(); }
+});
+
+view.addEventListener('dragstart',e=>{ const th=e.target.closest&&e.target.closest('#sk-head th[data-k]'); if(th){ S.skDrag=th.dataset.k; try{ e.dataTransfer.setData('text/plain',th.dataset.k); e.dataTransfer.effectAllowed='move'; }catch(x){} } });
+view.addEventListener('dragover',e=>{ if(S.skDrag&&e.target.closest&&e.target.closest('#sk-head th[data-k]')) e.preventDefault(); });
+view.addEventListener('drop',e=>{ const th=e.target.closest&&e.target.closest('#sk-head th[data-k]'); if(!th||!S.skDrag) return; e.preventDefault();
+  const from=S.skDrag, to=th.dataset.k; S.skDrag=null; if(from===to) return; const q=skColPrefs(), a=q.order.indexOf(from), t0=q.order.indexOf(to); if(a<0||t0<0) return;
+  q.order.splice(a,1); const t=q.order.indexOf(to); q.order.splice(a<t0?t+1:t,0,from); skColSave(q); skColRefresh(); });
+view.addEventListener('dragend',()=>{ S.skDrag=null; });
+
+/* ============ objednávka dodávateľovi (PDF + e-mail) ============ */
+const odKey='klima.ord';
+function odState(){
+  if(!S.ord){ let d=null; try{ d=JSON.parse(localStorage.getItem(odKey)||'null'); }catch(e){} S.ord=Object.assign({supId:'',lines:[],note:'',q:''},d||{},{q:''}); }
+  return S.ord;
+}
+const odSave=()=>{ try{ const o=odState(); localStorage.setItem(odKey,JSON.stringify({supId:o.supId,lines:o.lines,note:o.note})); }catch(e){} };
+const odUnit=it=>skGross(it.buy,skVat(it));
+const odLine=l=>{ const it=S.sklad.items.find(x=>x.id===l.id); if(!it) return null; const q=xnum(l.qty)||0, u=odUnit(it); return {it,q,u,sum:Math.round(q*u*100)/100}; };
+const odRows=()=>odState().lines.map(odLine).filter(Boolean);
+const odTotal=()=>Math.round(odRows().reduce((a,r)=>a+r.sum,0)*100)/100;
+function odMatches(q){
+  const o=odState(), t=imNorm(q).split(/\s+/).filter(Boolean); if(!t.length) return [];
+  const have=new Set(o.lines.map(l=>l.id));
+  return S.sklad.items.filter(it=>(!o.supId||it.supplierId===o.supId)&&!have.has(it.id)&&t.every(w=>imNorm([it.name,it.scode,it.ean,it.spec,it.place].join(' ')).includes(w))).slice(0,8);
+}
+function odAdd(id,qty){ const o=odState(); if(!S.sklad.items.some(x=>x.id===id)||o.lines.some(l=>l.id===id)) return; o.lines.push({id,qty:String(qty||1)}); o.q=''; odSave(); renderView(); }
+function odBuildHtml(){
+  const s=S.settings, o=odState(), rows=odRows(), sup=(S.sklad.suppliers||[]).find(x=>x.id===o.supId);
+  const body=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.it.name)}</td><td>${esc(r.it.scode||'')}</td><td class="r">${fq(r.q)} ${esc(r.it.unit)}</td><td class="r">${eur(r.u)}</td><td class="r">${eur(r.sum)}</td></tr>`).join('');
+  return `<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><title>Objednávka ${esc(dfmt(today()))}</title><style>
+body{font-family:"Segoe UI",Arial,sans-serif;color:#0f1b2d;margin:34px 40px;font-size:13px}h1{margin:0 0 4px;font-size:24px}.top{display:flex;justify-content:space-between;gap:30px;border-bottom:3px solid #0284c7;padding-bottom:14px;margin-bottom:18px}.sub{color:#556;font-size:12px;line-height:1.5}
+table{width:100%;border-collapse:collapse;margin-top:10px}th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#556;text-align:left;padding:7px 8px;border-bottom:2px solid #cbd5e1}td{padding:7px 8px;border-bottom:1px solid #e5eaf1}.r{text-align:right;white-space:nowrap}th.r{text-align:right}
+.tot{margin-top:14px;text-align:right;font-size:16px}.tot b{font-size:20px}.note{margin-top:18px;white-space:pre-wrap}</style></head><body>
+<div class="top"><div><h1>Objednávka</h1><div class="sub">Dátum: ${esc(dfmt(today()))}${sup?`<br>Dodávateľ: <b>${esc(sup.name)}</b>`:''}</div></div>
+<div class="sub" style="text-align:right"><b>${esc(s.company||'')}</b><br>${[s.address,s.ico?'IČO: '+s.ico:'',s.phone,s.email].filter(Boolean).map(esc).join('<br>')}</div></div>
+<table><thead><tr><th>#</th><th>Názov</th><th>Cudzí názov</th><th class="r">Počet</th><th class="r">Cena s DPH / MJ</th><th class="r">Celkom s DPH</th></tr></thead><tbody>${body}</tbody></table>
+<div class="tot">Celkom s DPH: <b>${eur(odTotal())}</b></div>${o.note?`<div class="note">${esc(o.note)}</div>`:''}</body></html>`;
+}
+function odPrint(){
+  if(!odRows().length){ toast('Objednávka je prázdna.'); return; }
+  const w=window.open('','_blank'); if(!w){ toast('Prehliadač zablokoval nové okno. Povoľ ho a skús znova.'); return; }
+  w.document.write(odBuildHtml()); w.document.close(); setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} },300);
+}
+function odMail(){
+  if(!window.klimaMail){ toast('Odosielanie mailov funguje len v nainštalovanej aplikácii Klima Office. Použi Tlačiť / uložiť PDF.'); return; }
+  if(!odRows().length){ toast('Objednávka je prázdna.'); return; }
+  const d=dfmt(today());
+  openMail({kind:'order',to:S.settings.orderEmail||'',subject:'Objednávka '+d+(S.settings.company?' – '+S.settings.company:''),vars:{datum:d},
+    filename:'Objednavka-'+today()+'.pdf',html:()=>odBuildHtml(),onSent:async()=>{},okMsg:to=>'Objednávka bola odoslaná na '+to.join(', ')+'.'});
+}
+function odResHtml(){
+  const o=odState(), m=odMatches(o.q);
+  if(!o.q.trim()) return '';
+  return m.length?m.map(it=>`<button type="button" class="btn small ghost" data-act="x-od-add" data-id="${esc(it.id)}" style="display:flex;justify-content:space-between;gap:12px;width:100%;text-align:left;margin:2px 0"><span>${esc(it.name)}${it.scode?` <small style="color:var(--muted)">· ${esc(it.scode)}</small>`:''}</span><b>${eur(odUnit(it))}</b></button>`).join(''):'<p class="hint" style="margin:6px 0">Nič sa nenašlo.</p>';
+}
+function odBody(){
+  const o=odState(), rows=o.lines.map((l,i)=>({l,i,r:odLine(l)})).filter(x=>x.r);
+  return rows.length?rows.map(x=>`<tr data-i="${x.i}"><td>${esc(x.r.it.name)}</td><td>${esc(x.r.it.scode||'')}</td><td class="num">${x.r.u?eur(x.r.u):'<span style="color:var(--bad)">bez ceny</span>'}</td><td class="num"><input type="number" class="n" min="0" step="any" data-xf="od.qty" value="${esc(o.lines[x.i].qty)}" style="width:80px"> <small>${esc(x.r.it.unit)}</small></td><td class="num od-sum">${eur(x.r.sum)}</td><td><button class="x" data-act="x-od-del" title="Odstrániť">${ICON.trash}</button></td></tr>`).join(''):'<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:26px">Objednávka je prázdna. Vyhľadaj položku vyššie.</td></tr>';
+}
+function viewSkOd(){
+  const o=odState(), sups=S.sklad.suppliers||[];
+  return `<div class="page-head"><div><h1>Sklad materiálu</h1><p>Vyber položky zo skladu, zadaj počet a pošli objednávku ako PDF na e-mail.</p></div><div>${skTabs()}</div></div>
+  <section class="card"><div class="card-head"><h3>Objednávka dodávateľovi</h3><button class="btn small ghost" data-act="x-od-clear">Vyčistiť</button></div>
+    <div class="toolbar" style="margin-bottom:8px"><label class="f" style="margin:0">Dodávateľ<select data-xf="od.sup"><option value="">Všetci</option>${sups.map(s=>`<option value="${esc(s.id)}" ${s.id===o.supId?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label>
+      <input type="text" data-xf="od.q" class="grow" placeholder="Hľadať položku podľa názvu alebo kódu a pridať…" value="${esc(o.q)}" style="max-width:420px"><button class="btn" data-act="x-od-scan" title="Skenovať kód">${ICON_SCAN}</button><button class="btn" data-act="x-od-need" title="Pridať položky pod minimom">Doplniť podľa návrhu</button></div>
+    <div id="od-res" style="max-width:640px">${odResHtml()}</div>
+    <div class="tablewrap"><table><thead><tr><th>Názov</th><th>Cudzí názov</th><th class="r">Nák. cena s DPH / MJ</th><th class="r">Počet</th><th class="r">Celkom s DPH</th><th></th></tr></thead><tbody id="od-body">${odBody()}</tbody></table></div>
+    <p style="text-align:right;font-size:17px;margin:12px 4px">Celkom s DPH: <b id="od-total">${eur(odTotal())}</b></p>
+    <label class="f">Poznámka v objednávke<textarea data-xf="od.note" style="min-height:70px" placeholder="Napr. dodacia adresa, termín…">${esc(o.note)}</textarea></label>
+    <label class="f">E-mail, na ktorý sa objednávka posiela<input type="text" data-xf="od.email" value="${esc(S.settings.orderEmail||'')}" placeholder="objednavky@dodavatel.sk" style="max-width:360px"></label>
+    <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn primary" data-act="x-od-mail" ${window.klimaMail?'':'title="Len v aplikácii pre PC"'}>${ICON.mail} Odoslať e-mailom (PDF)</button><button class="btn" data-act="x-od-print">Tlačiť / uložiť PDF</button></div>
+  </section>`;
+}
+function odRefresh(){ const b=$('#od-body'); if(b) b.innerHTML=odBody(); const t=$('#od-total'); if(t) t.textContent=eur(odTotal()); }
+view.addEventListener('input',e=>{
+  const el=e.target, k=el.dataset&&el.dataset.xf; if(!k||!k.startsWith('od.')) return; const o=odState();
+  if(k==='od.q'){ o.q=el.value; const r=$('#od-res'); if(r) r.innerHTML=odResHtml(); }
+  else if(k==='od.note'){ o.note=el.value; odSave(); }
+  else if(k==='od.qty'){ o.lines[+el.closest('tr').dataset.i].qty=el.value; odSave(); const r=odLine(o.lines[+el.closest('tr').dataset.i]); el.closest('tr').querySelector('.od-sum').textContent=eur(r.sum); $('#od-total').textContent=eur(odTotal()); }
+  else if(k==='od.email'){ S.settings.orderEmail=el.value.trim(); saveSettings(); }
+});
+view.addEventListener('change',e=>{ const el=e.target, k=el.dataset&&el.dataset.xf; if(k==='od.sup'){ odState().supId=el.value; odSave(); renderView(); } });
+view.addEventListener('keydown',e=>{ const el=e.target; if(e.key==='Enter'&&el.dataset&&el.dataset.xf==='od.q'){ e.preventDefault(); const q=el.value.trim(), ex=S.sklad.items.find(it=>q&&(String(it.ean||'')===q||String(it.scode||'')===q)), m=ex?[ex]:odMatches(q); if(m[0]) odAdd(m[0].id,1); else toast('Nič sa nenašlo.'); } });
+view.addEventListener('click',e=>{
+  const b=e.target.closest('[data-act^="x-od-"]'); if(!b) return; const a=b.dataset.act, o=odState();
+  if(a==='x-od-add') odAdd(b.dataset.id,1);
+  else if(a==='x-od-del'){ o.lines.splice(+b.closest('tr').dataset.i,1); odSave(); renderView(); }
+  else if(a==='x-od-clear'){ o.lines=[]; o.note=''; odSave(); renderView(); }
+  else if(a==='x-od-need'){ let n=0; for(const x of skNeeds()){ if(o.supId&&x.it.supplierId!==o.supId) continue; if(o.lines.some(l=>l.id===x.it.id)) continue; o.lines.push({id:x.it.id,qty:String(skOrderQty(x))}); n++; } odSave(); renderView(); toast(n?`Pridaných ${n} položiek podľa návrhu.`:'Nie je čo doplniť.'); }
+  else if(a==='x-od-scan') xScan(code=>{ const it=S.sklad.items.find(x=>String(x.ean||'')===code||String(x.scode||'')===code); if(!it){ toast('Kód '+code+' sa v sklade nenašiel.'); return; } odAdd(it.id,1); });
+  else if(a==='x-od-print') odPrint();
+  else if(a==='x-od-mail') odMail();
 });
 
 /* ============ štart ============ */
